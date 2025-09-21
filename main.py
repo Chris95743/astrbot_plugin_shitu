@@ -55,7 +55,7 @@ class AnimeTracePlugin(Star):
         # 创建30秒超时任务
         if user_id in self.timeout_tasks:
             self.timeout_tasks[user_id].cancel()  # 取消之前的超时任务
-        
+
         timeout_task = asyncio.create_task(self.timeout_check(user_id))
         self.timeout_tasks[user_id] = timeout_task
 
@@ -97,7 +97,7 @@ class AnimeTracePlugin(Star):
         try:
             # 首先尝试直接使用URL调用API（更高效）
             results = await self.call_animetrace_api_with_url(image_url, model)
-            
+
             # 如果URL方式失败，再回退到下载图片方式
             if not results or not results.get("data"):
                 logger.info("URL识别方式未返回结果，尝试下载图片识别...")
@@ -182,7 +182,7 @@ class AnimeTracePlugin(Star):
 
         model_name_map = {
             "pre_stable": "动漫识别模型",
-            "full_game_model_kira": "GalGame识别模型", 
+            "full_game_model_kira": "GalGame识别模型",
             "animetrace_high_beta": "通用识别模型"
         }
         logger.info(f"调用API - 模型: {model_name_map.get(model, model)} (base64方式)")
@@ -203,7 +203,7 @@ class AnimeTracePlugin(Star):
 
         model_name_map = {
             "pre_stable": "动漫识别模型",
-            "full_game_model_kira": "GalGame识别模型", 
+            "full_game_model_kira": "GalGame识别模型",
             "animetrace_high_beta": "通用识别模型"
         }
         logger.info(f"调用API - 模型: {model_name_map.get(model, model)} (URL方式)")
@@ -211,7 +211,6 @@ class AnimeTracePlugin(Star):
         async with aiohttp.ClientSession() as session:
             async with session.post(self.api_url, data=payload, timeout=30) as response:
                 if response.status != 200:
-                    error_text = await response.text()
                     # 如果URL方式失败，返回空结果让上层逻辑回退到base64方式
                     if response.status == 422:
                         logger.info("URL识别失败，准备回退到base64方式")
@@ -235,12 +234,12 @@ class AnimeTracePlugin(Star):
 
         model_name_map = {
             "pre_stable": "动漫识别",
-            "full_game_model_kira": "GalGame识别", 
+            "full_game_model_kira": "GalGame识别",
             "animetrace_high_beta": "通用识别"
         }
         emoji_map = {
             "pre_stable": "🎌",
-            "full_game_model_kira": "🎮", 
+            "full_game_model_kira": "🎮",
             "animetrace_high_beta": "🔍"
         }
         model_name = model_name_map.get(model, "图片识别")
