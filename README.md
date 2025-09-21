@@ -1,7 +1,7 @@
 # 🖼️ 动漫/Gal/二游图片识别插件
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.3.0-blue.svg" alt="版本">
+  <img src="https://img.shields.io/badge/version-2.4.0-blue.svg" alt="版本">
   <img src="https://img.shields.io/badge/python-3.8%2B-green.svg" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-orange.svg" alt="License">
   <img src="https://img.shields.io/badge/platform-AstrBot-purple.svg" alt="Platform">
@@ -14,6 +14,7 @@
 🛡️ **完善的错误处理**: 30秒超时保护，异常捕获，优雅降级  
 📝 **引用消息支持**: 可以识别引用消息中的图片  
 🎨 **美观的结果展示**: 清晰的格式化输出，支持多结果显示  
+🆕 **智能头像识别**: 支持@用户、手动输入QQ号、自动识别自己头像
 
 ## 📋 识别模型说明
 
@@ -22,6 +23,9 @@
 | `动漫识别` | 动漫角色识别 | pre_stable | 日本动漫角色 |
 | `gal识别` | GalGame角色识别 | full_game_model_kira | galgame角色 |
 | `通用识别` | 综合二次元识别 | animetrace_high_beta | 动画和galgame角色 |
+| `头像动漫识别` | QQ头像动漫识别 | pre_stable | 识别QQ用户头像 |
+| `头像gal识别` | QQ头像Gal识别 | full_game_model_kira | 识别QQ用户头像 |
+| `头像识别` | QQ头像通用识别 | animetrace_high_beta | 识别QQ用户头像 |
 
 ## 🚀 使用方式
 
@@ -45,7 +49,41 @@
 [引用消息包含图片] + 通用识别
 ```
 
-## ⚙️ 技术特性
+### 方式4: QQ头像识别 🆕
+支持多种智能方式识别QQ头像：
+
+#### 🎯 @用户识别
+```
+@目标用户 头像动漫识别
+@目标用户 头像gal识别  
+@目标用户 头像识别
+```
+
+#### 🆕 手动输入QQ号识别
+```
+头像识别 123456789
+头像动漫识别 987654321
+头像gal识别 555666777
+```
+
+#### 🤖 智能自我识别
+```
+头像识别
+头像动漫识别
+头像gal识别
+```
+
+💡 **智能行为**: 
+- **@目标用户**: 识别指定用户的头像
+- **手动输入QQ号**: 识别指定QQ号的头像
+- **不@任何人**: 自动识别发送者自己的头像
+
+⚠️ **注意**: 
+- **正确示例**: `@小明 头像gal识别` （识别小明的头像）
+- **手动示例**: `头像识别 123456789` （识别QQ号123456789的头像）
+- **智能示例**: `头像识别` （识别自己的头像）
+
+💡 **说明**: 使用QQ头像接口 `https://q.qlogo.cn/headimg_dl?dst_uin=QQ号&spec=640` 获取高清头像进行识别
 
 ### 🎯 智能识别策略
 ```
@@ -76,7 +114,6 @@
 ## 🔮 未来功能规划
 
 ### 🎯 即将推出的功能
-- **👤 个人头像识别**: 识别用户头像 
 - **👥 群头像识别**: 识别群聊的头像
 
 

@@ -5,11 +5,12 @@ from astrbot.api.message_components import Image as MsgImage
 import aiohttp
 import asyncio
 import base64
+import re
 from io import BytesIO
 from PIL import Image as PILImage
 
 
-@register("astrbot_plugin_shitu", "shenx", "动漫/Gal/二游图片识别插件", "2.2.1", "https://github.com/shenxgan")
+@register("astrbot_plugin_shitu", "shenx", "动漫/Gal/二游图片识别插件", "2.3.1", "https://github.com/shenxgan")
 class AnimeTracePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -34,6 +35,21 @@ class AnimeTracePlugin(Star):
     async def trace_search(self, event: AstrMessageEvent, args=None):
         """使用animetrace_high_beta模型进行通用图片识别"""
         return await self.handle_image_recognition(event, "animetrace_high_beta")
+
+    @filter.command("头像动漫识别")
+    async def avatar_anime_search(self, event: AstrMessageEvent, args=None):
+        """识别QQ用户头像（动漫模型）"""
+        return await self.handle_avatar_recognition(event, "pre_stable")
+
+    @filter.command("头像gal识别")
+    async def avatar_gal_search(self, event: AstrMessageEvent, args=None):
+        """识别QQ用户头像（GalGame模型）"""
+        return await self.handle_avatar_recognition(event, "full_game_model_kira")
+
+    @filter.command("头像识别")
+    async def avatar_trace_search(self, event: AstrMessageEvent, args=None):
+        """识别QQ用户头像（通用模型）"""
+        return await self.handle_avatar_recognition(event, "animetrace_high_beta")
 
     async def handle_image_recognition(self, event: AstrMessageEvent, model: str):
         """简化的图片识别处理"""
@@ -62,10 +78,88 @@ class AnimeTracePlugin(Star):
         await event.send(event.plain_result("📷 请发送要识别的图片（30秒内有效）"))
         logger.info(f"用户 {user_id} 进入等待图片状态，等待30秒")
 
+    async def handle_avatar_recognition(self, event: AstrMessageEvent, model: str):
+        """处理QQ头像识别"""
+        try:
+            # 调试日志
+            logger.info(f"头像识别命令被触发 - 模型: {model}")
+            logger.info(f"消息详情: {event.get_messages()}")
+
+            # 提取被@的用户或手动输入的QQ号
+            mentioned_user_id = await self.extract_mentioned_user(event)
+            logger.info(f"提取到的用户ID: {mentioned_user_id}")
+
+            if not mentioned_user_id:
+                # 如果没有@任何人，默认使用发送者自己的头像
+                mentioned_user_id = event.get_sender_id()
+                logger.info(f"未找到被@用户，使用发送者自己的ID: {mentioned_user_id}")
+                await event.send(event.plain_result("📸 识别您自己的头像..."))
+            else:
+                # 检查是否是手动输入的QQ号（通过正则匹配确认）
+                messages = event.get_messages()
+                full_text = ""
+                for msg in messages:
+                    if hasattr(msg, "text"):
+                        full_text += str(msg.text)
+                    elif hasattr(msg, "type") and msg.type == "Plain":
+                        full_text += str(msg)
+
+                import re
+                qq_match = re.search(r"头像(?:动漫|gal)?识别\s*(\d{5,12})", full_text)
+                if qq_match and qq_match.group(1) == mentioned_user_id:
+                    logger.info(f"识别到手动输入的QQ号: {mentioned_user_id}")
+                    await event.send(event.plain_result(f"📸 识别QQ号 {mentioned_user_id} 的头像..."))
+
+            # 获取头像URL
+            avatar_url = f"https://q.qlogo.cn/headimg_dl?dst_uin={mentioned_user_id}&spec=640"
+            logger.info(f"获取用户头像: {mentioned_user_id}")
+
+            # 标记此事件已被处理，避免消息监听器重复处理
+            event._avatar_command_processed = True
+
+            # 识别头像
+            await self.process_image_recognition(event, avatar_url, model)
+
+        except Exception as e:
+            logger.error(f"头像识别失败: {str(e)}")
+            await event.send(event.plain_result(f"❌ 头像识别失败: {str(e)}"))
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
-        """监听所有消息，处理等待中的图片识别请求"""
+        """监听所有消息，处理等待中的图片识别请求和特殊格式的头像识别命令"""
         user_id = event.get_sender_id()
+
+        # 检查特殊格式的头像识别命令（消息中包含@但命令可能被遗漏的情况）
+        messages = event.get_messages()
+        full_text = ""
+
+        logger.info(f"on_message收到消息，消息列表: {messages}")
+
+        for msg in messages:
+            logger.info(f"处理消息组件: type={getattr(msg, 'type', '无type')}, text={getattr(msg, 'text', '无text')}, 完整对象: {msg}")
+
+            if hasattr(msg, "text"):
+                full_text += str(msg.text)
+            elif hasattr(msg, "type") and msg.type == "Plain":
+                full_text += str(msg)
+
+        logger.info(f"提取的完整文本: '{full_text}'")
+
+        # 只有当标准命令处理器未处理时才检查
+        if not hasattr(event, "_avatar_command_processed"):
+            avatar_patterns = [
+                (r"头像动漫识别", "pre_stable"),
+                (r"头像gal识别", "full_game_model_kira"),
+                (r"头像识别", "animetrace_high_beta"),
+            ]
+
+            for pattern, model in avatar_patterns:
+                if re.search(pattern, full_text):
+                    logger.info(f"通过on_message检测到头像识别命令: {pattern}")
+                    # 标记为已处理，避免重复
+                    event._avatar_command_processed = True
+                    await self.handle_avatar_recognition(event, model)
+                    return  # 处理完后直接返回，避免重复处理
 
         # 检查用户是否在等待图片识别
         if user_id not in self.waiting_sessions:
@@ -119,6 +213,58 @@ class AnimeTracePlugin(Star):
             except Exception as send_error:
                 logger.warning(f"发送错误消息失败: {send_error}")
                 # 如果错误消息也发送失败，记录日志但不抛出异常
+
+    async def extract_mentioned_user(self, event: AstrMessageEvent) -> str:
+        """从事件中提取被@的用户QQ号或手动输入的QQ号"""
+        messages = event.get_messages()
+        logger.info(f"开始提取被@用户或手动QQ号，消息列表: {messages}")
+
+        # 首先检查是否有手动输入的QQ号
+        full_text = ""
+        for msg in messages:
+            if hasattr(msg, "text"):
+                full_text += str(msg.text)
+            elif hasattr(msg, "type") and msg.type == "Plain":
+                full_text += str(msg)
+
+        logger.info(f"提取的完整文本: '{full_text}'")
+
+        # 匹配手动输入QQ号的格式：头像识别 12345678910 或 头像识别12345678910
+        import re
+        qq_match = re.search(r"头像(?:动漫|gal)?识别\s*(\d{5,12})", full_text)
+        if qq_match:
+            qq_number = qq_match.group(1)
+            logger.info(f"找到手动输入的QQ号: {qq_number}")
+            return qq_number
+
+        for msg in messages:
+            logger.info(f"检查消息组件: type={getattr(msg, 'type', '无type')}, qq={getattr(msg, 'qq', '无qq')}, user_id={getattr(msg, 'user_id', '无user_id')}, text={getattr(msg, 'text', '无text')}")
+
+            # 检查是否有@提及
+            if hasattr(msg, "type") and msg.type == "At":
+                # QQ平台的@消息
+                if hasattr(msg, "qq"):
+                    logger.info(f"找到At组件，qq: {msg.qq}")
+                    return str(msg.qq)
+                if hasattr(msg, "user_id"):
+                    logger.info(f"找到At组件，user_id: {msg.user_id}")
+                    return str(msg.user_id)
+
+            # 检查文本中的@格式
+            if hasattr(msg, "text"):
+                text = str(msg.text)
+                logger.info(f"检查文本消息: {text}")
+                # 匹配 [CQ:at,qq=123456] 格式
+                at_match = re.search(r"\[CQ:at,qq=(\d+)\]", text)
+                if at_match:
+                    logger.info(f"找到CQ码@格式: {at_match.group(1)}")
+                    return at_match.group(1)
+
+                # 匹配 @用户名 格式（需要平台支持）
+                # 有些平台会直接解析为At组件，这里作为备选
+
+        logger.info("未找到被@的用户或手动输入的QQ号")
+        return None
 
     async def extract_image_from_event(self, event: AstrMessageEvent) -> str:
         """从事件中提取图片URL"""
