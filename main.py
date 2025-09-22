@@ -1,7 +1,7 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.message_components import Image as MsgImage
+from astrbot.api.message_components import Image as MsgImage, Reply
 import aiohttp
 import asyncio
 import base64
@@ -10,7 +10,7 @@ from io import BytesIO
 from PIL import Image as PILImage
 
 
-@register("astrbot_plugin_shitu", "shenx", "动漫/Gal/二游图片识别插件", "2.3.1", "https://github.com/shenxgan")
+@register("astrbot_plugin_shitu", "shenx", "动漫/Gal/二游图片识别插件", "2.4.1", "https://github.com/shenxgan")
 class AnimeTracePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -55,11 +55,27 @@ class AnimeTracePlugin(Star):
         """简化的图片识别处理"""
         user_id = event.get_sender_id()
 
-        # 检查当前消息是否包含图片
+        # 检查当前消息是否包含图片（包括引用消息中的图片）
         image_url = await self.extract_image_from_event(event)
         if image_url:
+            # 如果找到图片，直接进行识别
+            if image_url.startswith("telegram://"):
+                # Telegram文件需要特殊处理
+                await event.send(event.plain_result("❌ Telegram引用消息中的图片暂不支持识别，请直接发送图片"))
+                return
+
             await self.process_image_recognition(event, image_url, model)
             return
+
+        # 检查是否是引用消息但没有图片的情况
+        try:
+            raw_event = event._event if hasattr(event, "_event") else event
+            if hasattr(raw_event, "reply_to_message") and raw_event.reply_to_message:
+                logger.debug("检测到引用消息，但引用消息中没有找到图片")
+                await event.send(event.plain_result("❌ 引用消息中没有找到图片，请确保引用的消息包含图片"))
+                return
+        except Exception as e:
+            logger.warning(f"检查引用消息状态时出错: {str(e)}")
 
         # 如果没有图片，设置等待状态
         self.waiting_sessions[user_id] = {
@@ -76,23 +92,23 @@ class AnimeTracePlugin(Star):
         self.timeout_tasks[user_id] = timeout_task
 
         await event.send(event.plain_result("📷 请发送要识别的图片（30秒内有效）"))
-        logger.info(f"用户 {user_id} 进入等待图片状态，等待30秒")
+        logger.debug(f"用户 {user_id} 进入等待图片状态，等待30秒")
 
     async def handle_avatar_recognition(self, event: AstrMessageEvent, model: str):
         """处理QQ头像识别"""
         try:
             # 调试日志
-            logger.info(f"头像识别命令被触发 - 模型: {model}")
-            logger.info(f"消息详情: {event.get_messages()}")
+            logger.debug(f"头像识别命令被触发 - 模型: {model}")
+            logger.debug(f"消息详情: {event.get_messages()}")
 
             # 提取被@的用户或手动输入的QQ号
             mentioned_user_id = await self.extract_mentioned_user(event)
-            logger.info(f"提取到的用户ID: {mentioned_user_id}")
+            logger.debug(f"提取到的用户ID: {mentioned_user_id}")
 
             if not mentioned_user_id:
                 # 如果没有@任何人，默认使用发送者自己的头像
                 mentioned_user_id = event.get_sender_id()
-                logger.info(f"未找到被@用户，使用发送者自己的ID: {mentioned_user_id}")
+                logger.debug(f"未找到被@用户，使用发送者自己的ID: {mentioned_user_id}")
                 await event.send(event.plain_result("📸 识别您自己的头像..."))
             else:
                 # 检查是否是手动输入的QQ号（通过正则匹配确认）
@@ -107,12 +123,12 @@ class AnimeTracePlugin(Star):
                 import re
                 qq_match = re.search(r"头像(?:动漫|gal)?识别\s*(\d{5,12})", full_text)
                 if qq_match and qq_match.group(1) == mentioned_user_id:
-                    logger.info(f"识别到手动输入的QQ号: {mentioned_user_id}")
+                    logger.debug(f"识别到手动输入的QQ号: {mentioned_user_id}")
                     await event.send(event.plain_result(f"📸 识别QQ号 {mentioned_user_id} 的头像..."))
 
             # 获取头像URL
             avatar_url = f"https://q.qlogo.cn/headimg_dl?dst_uin={mentioned_user_id}&spec=640"
-            logger.info(f"获取用户头像: {mentioned_user_id}")
+            logger.debug(f"获取用户头像: {mentioned_user_id}")
 
             # 标记此事件已被处理，避免消息监听器重复处理
             event._avatar_command_processed = True
@@ -133,17 +149,17 @@ class AnimeTracePlugin(Star):
         messages = event.get_messages()
         full_text = ""
 
-        logger.info(f"on_message收到消息，消息列表: {messages}")
+        logger.debug(f"on_message收到消息，消息列表: {messages}")
 
         for msg in messages:
-            logger.info(f"处理消息组件: type={getattr(msg, 'type', '无type')}, text={getattr(msg, 'text', '无text')}, 完整对象: {msg}")
+            logger.debug(f"处理消息组件: type={getattr(msg, 'type', '无type')}, text={getattr(msg, 'text', '无text')}")
 
             if hasattr(msg, "text"):
                 full_text += str(msg.text)
             elif hasattr(msg, "type") and msg.type == "Plain":
                 full_text += str(msg)
 
-        logger.info(f"提取的完整文本: '{full_text}'")
+        logger.debug(f"提取的完整文本: '{full_text}'")
 
         # 只有当标准命令处理器未处理时才检查
         if not hasattr(event, "_avatar_command_processed"):
@@ -155,7 +171,7 @@ class AnimeTracePlugin(Star):
 
             for pattern, model in avatar_patterns:
                 if re.search(pattern, full_text):
-                    logger.info(f"通过on_message检测到头像识别命令: {pattern}")
+                    logger.debug(f"通过on_message检测到头像识别命令: {pattern}")
                     # 标记为已处理，避免重复
                     event._avatar_command_processed = True
                     await self.handle_avatar_recognition(event, model)
@@ -194,7 +210,7 @@ class AnimeTracePlugin(Star):
 
             # 如果URL方式失败，再回退到下载图片方式
             if not results or not results.get("data"):
-                logger.info("URL识别方式未返回结果，尝试下载图片识别...")
+                logger.debug("URL识别方式未返回结果，尝试下载图片识别...")
                 img_data = await self.download_and_process_image(image_url)
                 results = await self.call_animetrace_api(img_data, model)
 
@@ -207,9 +223,21 @@ class AnimeTracePlugin(Star):
                 # 如果发送失败，记录日志但不抛出异常
 
         except Exception as e:
-            logger.error(f"识别失败: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"识别失败: {error_msg}")
+
+            # 更友好的错误提示
+            if "HTTP 500" in error_msg:
+                user_msg = "❌ 识别服务暂时不可用，请稍后重试"
+            elif "HTTP 422" in error_msg:
+                user_msg = "❌ 图片格式不支持，请尝试其他图片"
+            elif "timeout" in error_msg.lower():
+                user_msg = "❌ 识别超时，请稍后重试"
+            else:
+                user_msg = f"❌ 识别失败: {error_msg}"
+
             try:
-                await event.send(event.plain_result(f"❌ 识别失败: {str(e)}"))
+                await event.send(event.plain_result(user_msg))
             except Exception as send_error:
                 logger.warning(f"发送错误消息失败: {send_error}")
                 # 如果错误消息也发送失败，记录日志但不抛出异常
@@ -217,7 +245,7 @@ class AnimeTracePlugin(Star):
     async def extract_mentioned_user(self, event: AstrMessageEvent) -> str:
         """从事件中提取被@的用户QQ号或手动输入的QQ号"""
         messages = event.get_messages()
-        logger.info(f"开始提取被@用户或手动QQ号，消息列表: {messages}")
+        logger.debug(f"开始提取被@用户或手动QQ号，消息列表: {messages}")
 
         # 首先检查是否有手动输入的QQ号
         full_text = ""
@@ -227,49 +255,50 @@ class AnimeTracePlugin(Star):
             elif hasattr(msg, "type") and msg.type == "Plain":
                 full_text += str(msg)
 
-        logger.info(f"提取的完整文本: '{full_text}'")
+        logger.debug(f"提取的完整文本: '{full_text}'")
 
         # 匹配手动输入QQ号的格式：头像识别 12345678910 或 头像识别12345678910
         import re
         qq_match = re.search(r"头像(?:动漫|gal)?识别\s*(\d{5,12})", full_text)
         if qq_match:
             qq_number = qq_match.group(1)
-            logger.info(f"找到手动输入的QQ号: {qq_number}")
+            logger.debug(f"找到手动输入的QQ号: {qq_number}")
             return qq_number
 
         for msg in messages:
-            logger.info(f"检查消息组件: type={getattr(msg, 'type', '无type')}, qq={getattr(msg, 'qq', '无qq')}, user_id={getattr(msg, 'user_id', '无user_id')}, text={getattr(msg, 'text', '无text')}")
+            logger.debug(f"检查消息组件: type={getattr(msg, 'type', '无type')}, qq={getattr(msg, 'qq', '无qq')}, user_id={getattr(msg, 'user_id', '无user_id')}")
 
             # 检查是否有@提及
             if hasattr(msg, "type") and msg.type == "At":
                 # QQ平台的@消息
                 if hasattr(msg, "qq"):
-                    logger.info(f"找到At组件，qq: {msg.qq}")
+                    logger.debug(f"找到At组件，qq: {msg.qq}")
                     return str(msg.qq)
                 if hasattr(msg, "user_id"):
-                    logger.info(f"找到At组件，user_id: {msg.user_id}")
+                    logger.debug(f"找到At组件，user_id: {msg.user_id}")
                     return str(msg.user_id)
 
             # 检查文本中的@格式
             if hasattr(msg, "text"):
                 text = str(msg.text)
-                logger.info(f"检查文本消息: {text}")
+                logger.debug(f"检查文本消息: {text}")
                 # 匹配 [CQ:at,qq=123456] 格式
                 at_match = re.search(r"\[CQ:at,qq=(\d+)\]", text)
                 if at_match:
-                    logger.info(f"找到CQ码@格式: {at_match.group(1)}")
+                    logger.debug(f"找到CQ码@格式: {at_match.group(1)}")
                     return at_match.group(1)
 
                 # 匹配 @用户名 格式（需要平台支持）
                 # 有些平台会直接解析为At组件，这里作为备选
 
-        logger.info("未找到被@的用户或手动输入的QQ号")
+        logger.debug("未找到被@的用户或手动输入的QQ号")
         return None
 
     async def extract_image_from_event(self, event: AstrMessageEvent) -> str:
         """从事件中提取图片URL"""
         messages = event.get_messages()
 
+        # 首先检查当前消息中的图片
         for msg in messages:
             # 标准图片组件
             if isinstance(msg, MsgImage):
@@ -293,34 +322,76 @@ class AnimeTracePlugin(Star):
                     # 这是QQ官方的图片消息格式，需要后续消息处理
                     continue
 
+        # 检查引用消息中的图片（Telegram等平台）
+        try:
+            # 查找Reply组件
+            for msg in messages:
+                if isinstance(msg, Reply):
+                    # Reply组件包含原始消息的信息
+                    if hasattr(msg, "chain") and msg.chain:
+                        # 在引用消息的chain中查找图片
+                        for reply_msg in msg.chain:
+                            if isinstance(reply_msg, MsgImage):
+                                if hasattr(reply_msg, "url") and reply_msg.url:
+                                    logger.debug(f"在引用消息中找到图片URL: {reply_msg.url}")
+                                    return reply_msg.url.strip()
+                                if hasattr(reply_msg, "file") and reply_msg.file:
+                                    file_content = str(reply_msg.file)
+                                    if "http" in file_content:
+                                        import re
+                                        urls = re.findall(r"https?://[^\s\`\']+", file_content)
+                                        if urls:
+                                            logger.debug(f"在引用消息文件中找到图片URL: {urls[0]}")
+                                            return urls[0].strip("`'")
+
+        except Exception as e:
+            logger.warning(f"检查引用消息图片时出错: {str(e)}")
+
+        # 如果没有找到图片，记录日志
+        logger.debug("在当前消息和引用消息中均未找到图片")
         return None
 
     async def download_and_process_image(self, image_url: str) -> str:
         """下载并处理图片"""
-        logger.info(f"下载图片: {image_url[:100]}...")
+        logger.debug(f"下载图片: {image_url[:100]}...")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(image_url) as response:
-                if response.status != 200:
-                    raise Exception(f"图片下载失败: HTTP {response.status}")
-                img_data = await response.read()
+        try:
+            # 处理Telegram的特殊URL格式
+            if image_url.startswith("telegram://"):
+                file_id = image_url.replace("telegram://", "")
+                logger.debug(f"检测到Telegram文件，file_id: {file_id}")
+                # 对于Telegram文件，我们需要通过file_id获取实际的文件URL
+                # 这里简化处理，直接返回一个标识，让上层逻辑处理
+                # 在实际环境中，需要调用Telegram Bot API获取文件路径
+                raise Exception("Telegram文件需要特殊处理，当前版本暂不支持引用消息中的图片识别")
 
-        # 处理图片
-        img = PILImage.open(BytesIO(img_data))
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, timeout=30) as response:
+                    if response.status != 200:
+                        raise Exception(f"图片下载失败: HTTP {response.status}")
+                    img_data = await response.read()
 
-        # 调整大小（最大1024px）
-        if max(img.size) > 1024:
-            ratio = 1024 / max(img.size)
-            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-            img = img.resize(new_size, PILImage.LANCZOS)
+            # 处理图片
+            img = PILImage.open(BytesIO(img_data))
 
-        # 转换为JPEG并编码为base64
-        buffered = BytesIO()
-        img.save(buffered, format="JPEG", quality=85)
-        base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            # 调整大小（最大1024px）
+            if max(img.size) > 1024:
+                ratio = 1024 / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                img = img.resize(new_size, PILImage.LANCZOS)
 
-        logger.info(f"图片处理完成，大小: {len(base64_data)} 字符")
-        return base64_data
+            # 转换为JPEG并编码为base64
+            buffered = BytesIO()
+            img.save(buffered, format="JPEG", quality=85)
+            base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+            logger.debug(f"图片处理完成，大小: {len(base64_data)} 字符")
+            return base64_data
+        except asyncio.TimeoutError:
+            raise Exception("图片下载超时，请稍后重试")
+        except Exception as e:
+            logger.error(f"图片处理失败: {str(e)}")
+            raise Exception(f"图片处理失败: {str(e)}")
 
     async def call_animetrace_api(self, img_base64: str, model: str) -> dict:
         """使用base64调用AnimeTrace API"""
@@ -331,17 +402,25 @@ class AnimeTracePlugin(Star):
             "full_game_model_kira": "GalGame识别模型",
             "animetrace_high_beta": "通用识别模型"
         }
-        logger.info(f"调用API - 模型: {model_name_map.get(model, model)} (base64方式)")
+        logger.debug(f"调用API - 模型: {model_name_map.get(model, model)} (base64方式)")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.api_url, data=payload, timeout=30) as response:
-                if response.status != 200:
-                    await response.text()
-                    raise Exception(f"API错误: HTTP {response.status}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.api_url, data=payload, timeout=30) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.warning(f"API返回错误状态: HTTP {response.status}, 响应: {error_text[:200]}")
+                        raise Exception(f"API错误: HTTP {response.status}")
 
-                result = await response.json()
-                logger.info(f"API返回: {len(result.get('data', []))} 个结果")
-                return result
+                    result = await response.json()
+                    logger.debug(f"API返回: {len(result.get('data', []))} 个结果")
+                    return result
+        except asyncio.TimeoutError:
+            logger.error("API调用超时")
+            raise Exception("识别服务响应超时，请稍后重试")
+        except Exception as e:
+            logger.error(f"base64 API调用失败: {str(e)}")
+            raise
 
     async def call_animetrace_api_with_url(self, image_url: str, model: str) -> dict:
         """使用URL直接调用AnimeTrace API"""
@@ -352,20 +431,24 @@ class AnimeTracePlugin(Star):
             "full_game_model_kira": "GalGame识别模型",
             "animetrace_high_beta": "通用识别模型"
         }
-        logger.info(f"调用API - 模型: {model_name_map.get(model, model)} (URL方式)")
+        logger.debug(f"调用API - 模型: {model_name_map.get(model, model)} (URL方式)")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.api_url, data=payload, timeout=30) as response:
-                if response.status != 200:
-                    # 如果URL方式失败，返回空结果让上层逻辑回退到base64方式
-                    if response.status == 422:
-                        logger.info("URL识别失败，准备回退到base64方式")
-                        return {"data": []}
-                    raise Exception(f"API错误: HTTP {response.status}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.api_url, data=payload, timeout=30) as response:
+                    if response.status != 200:
+                        # 如果URL方式失败，返回空结果让上层逻辑回退到base64方式
+                        if response.status in [422, 500, 502, 503, 504]:
+                            logger.debug(f"URL识别失败 (HTTP {response.status})，准备回退到base64方式")
+                            return {"data": []}
+                        raise Exception(f"API错误: HTTP {response.status}")
 
-                result = await response.json()
-                logger.info(f"API返回: {len(result.get('data', []))} 个结果")
-                return result
+                    result = await response.json()
+                    logger.debug(f"API返回: {len(result.get('data', []))} 个结果")
+                    return result
+        except Exception as e:
+            logger.warning(f"URL方式调用失败: {str(e)}，准备回退到base64方式")
+            return {"data": []}
 
     def format_results(self, data: dict, model: str) -> str:
         """格式化识别结果"""
@@ -418,7 +501,7 @@ class AnimeTracePlugin(Star):
                 del self.timeout_tasks[user_id]
                 try:
                     await event.send(event.plain_result("⏰ 识别请求已超时，请重新发送命令"))
-                    logger.info(f"用户 {user_id} 的图片识别请求已超时")
+                    logger.debug(f"用户 {user_id} 的图片识别请求已超时")
                 except Exception as send_error:
                     logger.warning(f"发送超时消息失败: {send_error}")
                     # 如果发送超时消息失败，记录日志但不影响清理操作
