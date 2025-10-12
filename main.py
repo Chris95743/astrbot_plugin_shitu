@@ -10,7 +10,7 @@ from io import BytesIO
 from PIL import Image as PILImage
 
 
-@register("astrbot_plugin_shitu", "aurora", "动漫/Gal/二游图片识别插件", "2.4.1", "https://github.com/Aurora-xk/astrbot_plugin_shitu")
+@register("astrbot_plugin_shitu", "aurora", "动漫/Gal/二游图片识别插件", "3.5", "https://github.com/Aurora-xk/astrbot_plugin_shitu")
 class AnimeTracePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
