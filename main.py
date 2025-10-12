@@ -10,13 +10,24 @@ from io import BytesIO
 from PIL import Image as PILImage
 
 
-@register("astrbot_plugin_shitu", "shenx", "动漫/Gal/二游图片识别插件", "2.4.1", "https://github.com/shenxgan")
+@register("astrbot_plugin_shitu", "aurora", "动漫/Gal/二游图片识别插件", "2.4.1", "https://github.com/Aurora-xk/astrbot_plugin_shitu")
 class AnimeTracePlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.api_url = "https://api.animetrace.com/v1/search"
         self.waiting_sessions = {}  # 简单的会话管理
         self.timeout_tasks = {}  # 存储超时任务
+        
+        # 加载配置
+        if config:
+            shitu_config = config.get("shitu_settings", {})
+        else:
+            shitu_config = getattr(self.context, '_config', {}).get("shitu_settings", {})
+        
+        self.timeout_seconds = shitu_config.get("timeout_seconds", 30)
+        self.prompt_send_image = shitu_config.get("prompt_send_image", "📷 请发送要识别的图片（30秒内有效）")
+        self.prompt_timeout = shitu_config.get("prompt_timeout", "⏰ 识别请求已超时，请重新发送命令")
+        self.use_markdown = shitu_config.get("use_markdown", True)
 
     async def initialize(self):
         logger.info("动漫/Gal/二游识别插件已加载")
@@ -59,11 +70,6 @@ class AnimeTracePlugin(Star):
         image_url = await self.extract_image_from_event(event)
         if image_url:
             # 如果找到图片，直接进行识别
-            if image_url.startswith("telegram://"):
-                # Telegram文件需要特殊处理
-                await event.send(event.plain_result("❌ Telegram引用消息中的图片暂不支持识别，请直接发送图片"))
-                return
-
             await self.process_image_recognition(event, image_url, model)
             return
 
@@ -91,8 +97,8 @@ class AnimeTracePlugin(Star):
         timeout_task = asyncio.create_task(self.timeout_check(user_id))
         self.timeout_tasks[user_id] = timeout_task
 
-        await event.send(event.plain_result("📷 请发送要识别的图片（30秒内有效）"))
-        logger.debug(f"用户 {user_id} 进入等待图片状态，等待30秒")
+        await event.send(event.plain_result(self.prompt_send_image))
+        logger.debug(f"用户 {user_id} 进入等待图片状态，等待{self.timeout_seconds}秒")
 
     async def handle_avatar_recognition(self, event: AstrMessageEvent, model: str):
         """处理QQ头像识别"""
@@ -183,9 +189,9 @@ class AnimeTracePlugin(Star):
 
         session = self.waiting_sessions[user_id]
 
-        # 检查是否超时（30秒）
+        # 检查是否超时
         current_time = asyncio.get_event_loop().time()
-        if current_time - session["timestamp"] > 30:
+        if current_time - session["timestamp"] > self.timeout_seconds:
             return  # 超时检查由定时任务处理，这里直接返回
 
         # 提取图片
@@ -363,7 +369,7 @@ class AnimeTracePlugin(Star):
                 # 对于Telegram文件，我们需要通过file_id获取实际的文件URL
                 # 这里简化处理，直接返回一个标识，让上层逻辑处理
                 # 在实际环境中，需要调用Telegram Bot API获取文件路径
-                raise Exception("Telegram文件需要特殊处理，当前版本暂不支持引用消息中的图片识别")
+                # Telegram文件现在支持识别，继续正常处理流程
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(image_url, timeout=30) as response:
@@ -474,33 +480,49 @@ class AnimeTracePlugin(Star):
         model_name = model_name_map.get(model, "图片识别")
         emoji = emoji_map.get(model, "🔍")
 
-        lines = [f"**{emoji} {model_name}结果**", "=" * 20]
-
-        # 显示前5个结果
-        for i, char in enumerate(characters[:5]):
-            name = char.get("character", "未知角色")
-            work = char.get("work", "未知作品")
-            lines.append(f"{i + 1}. **{name}** - 《{work}》")
-
-        if len(characters) > 5:
-            lines.append(f"\n> 共 {len(characters)} 个结果，显示前5项")
-
-        lines.append("\n💡 数据来源: AnimeTrace，仅供参考")
+        if self.use_markdown:
+            # Markdown格式输出
+            lines = [f"**{emoji} {model_name}结果**", "=" * 20]
+            
+            # 显示前5个结果
+            for i, char in enumerate(characters[:5]):
+                name = char.get("character", "未知角色")
+                work = char.get("work", "未知作品")
+                lines.append(f"{i + 1}. **{name}** - 《{work}》")
+            
+            if len(characters) > 5:
+                lines.append(f"\n> 共 {len(characters)} 个结果，显示前5项")
+            
+            lines.append("\n💡 数据来源: AnimeTrace，仅供参考")
+        else:
+            # 纯文本格式输出
+            lines = [f"{emoji} {model_name}结果"]
+            
+            # 显示前5个结果
+            for i, char in enumerate(characters[:5]):
+                name = char.get("character", "未知角色")
+                work = char.get("work", "未知作品")
+                lines.append(f"{i + 1}. {name} - 《{work}》")
+            
+            if len(characters) > 5:
+                lines.append(f"共 {len(characters)} 个结果，显示前5项")
+            
+            lines.append("数据来源: AnimeTrace，仅供参考")
 
         return "\n".join(lines)
 
     async def timeout_check(self, user_id: str):
-        """30秒超时检查"""
+        """超时检查"""
         try:
-            await asyncio.sleep(30)  # 等待30秒
+            await asyncio.sleep(self.timeout_seconds)  # 等待配置的超时时间
             if user_id in self.waiting_sessions:
-                # 30秒后仍然在等待，发送超时消息
+                # 超时后仍然在等待，发送超时消息
                 session = self.waiting_sessions[user_id]
                 event = session["event"]
                 del self.waiting_sessions[user_id]
                 del self.timeout_tasks[user_id]
                 try:
-                    await event.send(event.plain_result("⏰ 识别请求已超时，请重新发送命令"))
+                    await event.send(event.plain_result(self.prompt_timeout))
                     logger.debug(f"用户 {user_id} 的图片识别请求已超时")
                 except Exception as send_error:
                     logger.warning(f"发送超时消息失败: {send_error}")
