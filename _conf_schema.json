@@ -26,7 +26,26 @@
         "type": "bool",
         "default": true,
         "hint": "开启后会使用Markdown格式美化输出结果，关闭则使用纯文本格式"
+      },
+      "handoff_to_llm": {
+        "description": "识别结果是否交给当前LLM继续处理（经过人设提示词）",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后会将识别到的文本结果作为提示词交给当前会话LLM，由其整合、润色或进一步回答。"
+      },
+        "handoff_with_image": {
+          "description": "交给LLM时是否一并传入原图URL（多模态）",
+          "type": "bool",
+          "default": false,
+          "hint": "（建议关闭）开启后会把原图的 http/https URL 一并作为 image_urls 传给LLM，用于多模态总结。关闭则仅传文本。"
+        },
+      "llm_intro_message": {
+        "description": "交给LLM前置引导语（将会出现在识别结果前，可自定义）",
+        "type": "string",
+        "default": "用户向你发来了一张图片，请根据下述识别结果，用通俗中文总结并给出相关信息补充和提醒（只重点介绍第一，第二个结果）。",
+        "hint": "该引导语会放在识别结果前，帮助LLM以通俗中文进行总结与提醒；可留空使用默认文案"
       }
+      
     }
   }
 }
