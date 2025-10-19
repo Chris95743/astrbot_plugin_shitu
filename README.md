@@ -23,10 +23,10 @@
 |--------|------------|---------|------------|
 | `动漫识别` | 动漫角色识别 | pre_stable | 日本动漫角色 |
 | `gal识别` | GalGame角色识别 | full_game_model_kira | galgame角色 |
-| `通用识别` | 综合二次元识别 | animetrace_high_beta | 动画和galgame角色 |
+| `这是谁` | 综合二次元识别 | animetrace_high_beta | 动画和galgame角色 |
 | `头像动漫识别` | QQ头像动漫识别 | pre_stable | 识别QQ用户头像 |
 | `头像gal识别` | QQ头像Gal识别 | full_game_model_kira | 识别QQ用户头像 |
-| `头像识别` | QQ头像通用识别 | animetrace_high_beta | 识别QQ用户头像 |
+| `这头像是谁` | QQ头像通用识别 | animetrace_high_beta | 识别QQ用户头像 |
 
 ## 🚀 使用方式
 
