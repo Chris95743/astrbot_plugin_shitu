@@ -28,6 +28,15 @@ class AnimeTracePlugin(Star):
         self.prompt_send_image = shitu_config.get("prompt_send_image", "📷 请发送要识别的图片（30秒内有效）")
         self.prompt_timeout = shitu_config.get("prompt_timeout", "⏰ 识别请求已超时，请重新发送命令")
         self.use_markdown = shitu_config.get("use_markdown", True)
+    # 新增：识别结果交给 LLM 的开关
+        self.handoff_to_llm = shitu_config.get("handoff_to_llm", False)
+        # 新增：是否一并传入图片（多模态）
+        self.handoff_with_image = shitu_config.get("handoff_with_image", True)
+        # 新增：交给 LLM 的前置引导语（可自定义）
+        self.llm_intro_message = shitu_config.get(
+            "llm_intro_message",
+            "用户向你发来了一张图片，请根据下述识别结果，用通俗中文总结并给出相关信息补充和提醒。",
+        )
 
     async def initialize(self):
         logger.info("动漫/Gal/二游识别插件已加载")
@@ -35,42 +44,49 @@ class AnimeTracePlugin(Star):
     @filter.command("动漫识别", "动漫图片识别")
     async def anime_search(self, event: AstrMessageEvent, args=None):
         """使用pre_stable模型进行动漫图片识别"""
-        return await self.handle_image_recognition(event, "pre_stable")
+        async for res in self.handle_image_recognition(event, "pre_stable"):
+            yield res
 
     @filter.command("gal识别", "GalGame图片识别")
     async def gal_search(self, event: AstrMessageEvent, args=None):
         """使用full_game_model_kira模型进行GalGame图片识别"""
-        return await self.handle_image_recognition(event, "full_game_model_kira")
+        async for res in self.handle_image_recognition(event, "full_game_model_kira"):
+            yield res
 
-    @filter.command("通用识别", "动漫/Gal/二游图片识别")
+    @filter.command("这是谁", "动漫/Gal/二游图片识别")
     async def trace_search(self, event: AstrMessageEvent, args=None):
         """使用animetrace_high_beta模型进行通用图片识别"""
-        return await self.handle_image_recognition(event, "animetrace_high_beta")
+        async for res in self.handle_image_recognition(event, "animetrace_high_beta"):
+            yield res
 
     @filter.command("头像动漫识别")
     async def avatar_anime_search(self, event: AstrMessageEvent, args=None):
         """识别QQ用户头像（动漫模型）"""
-        return await self.handle_avatar_recognition(event, "pre_stable")
+        async for res in self.handle_avatar_recognition(event, "pre_stable"):
+            yield res
 
     @filter.command("头像gal识别")
     async def avatar_gal_search(self, event: AstrMessageEvent, args=None):
         """识别QQ用户头像（GalGame模型）"""
-        return await self.handle_avatar_recognition(event, "full_game_model_kira")
+        async for res in self.handle_avatar_recognition(event, "full_game_model_kira"):
+            yield res
 
-    @filter.command("头像识别")
+    @filter.command("这头像是谁")
     async def avatar_trace_search(self, event: AstrMessageEvent, args=None):
         """识别QQ用户头像（通用模型）"""
-        return await self.handle_avatar_recognition(event, "animetrace_high_beta")
+        async for res in self.handle_avatar_recognition(event, "animetrace_high_beta"):
+            yield res
 
     async def handle_image_recognition(self, event: AstrMessageEvent, model: str):
-        """简化的图片识别处理"""
+        """简化的图片识别处理（透传下游 async generator）"""
         user_id = event.get_sender_id()
 
         # 检查当前消息是否包含图片（包括引用消息中的图片）
         image_url = await self.extract_image_from_event(event)
         if image_url:
-            # 如果找到图片，直接进行识别
-            await self.process_image_recognition(event, image_url, model)
+            # 如果找到图片，直接进行识别并透传结果
+            async for res in self.process_image_recognition(event, image_url, model):
+                yield res
             return
 
         # 检查是否是引用消息但没有图片的情况
@@ -140,7 +156,8 @@ class AnimeTracePlugin(Star):
             event._avatar_command_processed = True
 
             # 识别头像
-            await self.process_image_recognition(event, avatar_url, model)
+            async for res in self.process_image_recognition(event, avatar_url, model):
+                yield res
 
         except Exception as e:
             logger.error(f"头像识别失败: {str(e)}")
@@ -180,7 +197,8 @@ class AnimeTracePlugin(Star):
                     logger.debug(f"通过on_message检测到头像识别命令: {pattern}")
                     # 标记为已处理，避免重复
                     event._avatar_command_processed = True
-                    await self.handle_avatar_recognition(event, model)
+                    async for res in self.handle_avatar_recognition(event, model):
+                        yield res
                     return  # 处理完后直接返回，避免重复处理
 
         # 检查用户是否在等待图片识别
@@ -204,7 +222,8 @@ class AnimeTracePlugin(Star):
         if user_id in self.timeout_tasks:
             self.timeout_tasks[user_id].cancel()  # 取消超时任务
             del self.timeout_tasks[user_id]
-        await self.process_image_recognition(event, image_url, session["model"])
+        async for res in self.process_image_recognition(event, image_url, session["model"]):
+            yield res
 
     async def process_image_recognition(
         self, event: AstrMessageEvent, image_url: str, model: str
@@ -220,13 +239,47 @@ class AnimeTracePlugin(Star):
                 img_data = await self.download_and_process_image(image_url)
                 results = await self.call_animetrace_api(img_data, model)
 
-            # 格式化并发送结果
+            # 格式化结果
             response = self.format_results(results, model)
+
+            # 分支：是否交给当前 LLM 处理（带人格）
+            if self.handoff_to_llm:
+                try:
+                    # 获取/创建当前会话的 Conversation，以触发人设(Persona)注入
+                    conv_mgr = self.context.conversation_manager
+                    cid = await conv_mgr.get_curr_conversation_id(event.unified_msg_origin)
+                    if not cid:
+                        cid = await conv_mgr.new_conversation(event.unified_msg_origin)
+                    conversation = await conv_mgr.get_conversation(event.unified_msg_origin, cid)
+
+                    # 组织 LLM 提示词（前置可自定义引导语 + 识别结果）
+                    intro = self.llm_intro_message or "用户向你发来了一张图片，请根据下述识别结果，用通俗中文总结并给出相关信息补充和提醒。"
+                    prompt = f"{intro}\n\n{response}"
+                    # 多模态：根据配置决定是否把原图 URL 作为 image_urls 传入
+                    image_inputs = []
+                    if self.handoff_with_image and image_url and image_url.lower().startswith(("http://", "https://")):
+                        image_inputs = [image_url]
+                    func_tool_mgr = self.context.get_llm_tool_manager()
+                    yield event.request_llm(
+                        prompt=prompt,
+                        image_urls=image_inputs,
+                        func_tool_manager=func_tool_mgr,
+                        conversation=conversation,
+                    )
+                except Exception as le:
+                    logger.error(f"交给 LLM 处理失败: {le}")
+                    # 回退到直接发送原始结果
+                    try:
+                        await event.send(event.plain_result(response))
+                    except Exception as send_error:
+                        logger.warning(f"发送识别结果失败: {send_error}")
+                return
+
+            # 默认：直接将格式化结果发送给用户
             try:
                 await event.send(event.plain_result(response))
             except Exception as send_error:
                 logger.warning(f"发送识别结果失败: {send_error}")
-                # 如果发送失败，记录日志但不抛出异常
 
         except Exception as e:
             error_msg = str(e)
